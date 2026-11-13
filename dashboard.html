@@ -1,0 +1,1065 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pesky Weapons Analytics</title>
+  <!--
+    The playtest dashboard (docs/ANALYTICS.md section 8). Ships with every WebGL build beside index.html and
+    reads the team Sheet through the Apps Script's GET ?format=json (tools/analytics/Code.gs). No libraries:
+    the charts are plain SVG. ?src=<url> reads another JSON source (a local file, for testing).
+  -->
+  <style>
+    :root {
+      color-scheme: light;
+      --page: #f9f9f7;
+      --surface: #fcfcfb;
+      --ink: #0b0b0b;
+      --ink-2: #52514e;
+      --muted: #898781;
+      --grid: #e1e0d9;
+      --axis: #c3c2b7;
+      --ring: rgba(11, 11, 11, 0.10);
+      --s1: #2a78d6;
+      --s2: #eb6834;
+      --s3: #1baf7a;
+      --s4: #eda100;
+      --critical: #d03b3b;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root:where(:not([data-theme="light"])) {
+        color-scheme: dark;
+        --page: #0d0d0d;
+        --surface: #1a1a19;
+        --ink: #f0efec;
+        --ink-2: #c3c2b7;
+        --muted: #898781;
+        --grid: #2c2c2a;
+        --axis: #383835;
+        --ring: rgba(255, 255, 255, 0.10);
+        --s1: #3987e5;
+        --s2: #d95926;
+        --s3: #199e70;
+        --s4: #c98500;
+      }
+    }
+    :root[data-theme="dark"] {
+      color-scheme: dark;
+      --page: #0d0d0d;
+      --surface: #1a1a19;
+      --ink: #f0efec;
+      --ink-2: #c3c2b7;
+      --muted: #898781;
+      --grid: #2c2c2a;
+      --axis: #383835;
+      --ring: rgba(255, 255, 255, 0.10);
+      --s1: #3987e5;
+      --s2: #d95926;
+      --s3: #199e70;
+      --s4: #c98500;
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--page);
+      color: var(--ink);
+      font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+    }
+    main { max-width: 1100px; margin: 0 auto; padding: 24px 16px 48px; }
+    header { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px 16px; }
+    h1 { font-size: 22px; margin: 0; letter-spacing: -0.01em; }
+    h2 { font-size: 15px; margin: 0 0 2px; }
+    .sub { color: var(--ink-2); margin: 0; }
+    .note { color: var(--muted); font-size: 12px; margin: 0 0 8px; }
+
+    .filters { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; margin: 20px 0 16px; }
+    .filters label { display: inline-flex; align-items: center; gap: 8px; color: var(--ink-2); }
+    select, button {
+      font: inherit; color: var(--ink); background: var(--surface);
+      border: 1px solid var(--axis); border-radius: 6px; padding: 5px 10px;
+    }
+    button { cursor: pointer; }
+    button:hover, select:hover { border-color: var(--muted); }
+
+    .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; margin-bottom: 12px; }
+    .tile, .card { background: var(--surface); border: 1px solid var(--ring); border-radius: 10px; padding: 14px 16px; }
+    .tile .label { color: var(--ink-2); font-size: 13px; }
+    .tile .value { font-size: 30px; font-weight: 600; line-height: 1.2; margin: 4px 0 2px; }
+    .tile .n { color: var(--muted); font-size: 12px; }
+
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 460px), 1fr)); gap: 12px; }
+    .card.wide { grid-column: 1 / -1; }
+    .chart { position: relative; width: 100%; }
+    .chart svg { display: block; width: 100%; overflow: visible; }
+    .chart text { font: 11px system-ui, -apple-system, "Segoe UI", sans-serif; fill: var(--muted); }
+    .chart text.value { fill: var(--ink-2); }
+    .chart text.inbar { fill: #ffffff; font-weight: 600; }
+    .chart .hit { fill: transparent; cursor: default; }
+    .chart .hit:hover { fill: var(--ink); fill-opacity: 0.04; }
+    .empty { color: var(--muted); padding: 40px 0; text-align: center; }
+
+    .legend { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 6px 0 4px; color: var(--ink-2); font-size: 12px; }
+    .legend span { display: inline-flex; align-items: center; gap: 6px; }
+    .legend i { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+    .section-head { margin: 36px 0 4px; font-size: 18px; }
+    .chart circle.dot { stroke: var(--surface); stroke-width: 2; }
+
+    .tip {
+      position: fixed; pointer-events: none; z-index: 10; display: none;
+      background: var(--surface); color: var(--ink); border: 1px solid var(--ring);
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12); border-radius: 8px; padding: 8px 10px; font-size: 12px;
+      max-width: 260px;
+    }
+    .tip b { display: block; margin-bottom: 2px; }
+
+    .status { margin: 12px 0; padding: 10px 14px; border-radius: 8px; border: 1px solid var(--ring); background: var(--surface); }
+    .status.error { border-color: var(--critical); }
+    .status.error::before { content: "⚠ "; color: var(--critical); }
+
+    details { margin-top: 12px; }
+    summary { cursor: pointer; color: var(--ink-2); padding: 6px 0; }
+    .table-wrap { overflow-x: auto; }
+    table { border-collapse: collapse; width: 100%; font-size: 12px; background: var(--surface); }
+    th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--grid); white-space: nowrap; }
+    th { color: var(--ink-2); font-weight: 600; }
+    td.num { font-variant-numeric: tabular-nums; text-align: right; }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <div>
+      <h1>Pesky Weapons playtest analytics</h1>
+      <p class="sub">Runs that started with 3 or more players, as recorded by the host's game.</p>
+    </div>
+    <div>
+      <span class="note" id="updated"></span>
+      <button id="refresh" type="button">Refresh</button>
+    </div>
+  </header>
+
+  <div class="filters">
+    <label>Build <select id="build" autocomplete="off"><option value="">All builds</option></select></label>
+    <label><input type="checkbox" id="abandoned" autocomplete="off"> Include runs the host left mid-way</label>
+  </div>
+
+  <div id="status" class="status" hidden></div>
+
+  <section class="tiles" aria-label="Headline numbers">
+    <div class="tile"><div class="label">Runs recorded</div><div class="value" id="t-runs">–</div><div class="n" id="t-runs-n"></div></div>
+    <div class="tile"><div class="label">Crew escaped</div><div class="value" id="t-escape">–</div><div class="n" id="t-escape-n"></div></div>
+    <div class="tile"><div class="label">Typical run length</div><div class="value" id="t-length">–</div><div class="n" id="t-length-n"></div></div>
+    <div class="tile"><div class="label">Runs where the Mage was caught</div><div class="value" id="t-caught">–</div><div class="n" id="t-caught-n"></div></div>
+    <div class="tile"><div class="label">Votes that hit the Mage</div><div class="value" id="t-hit">–</div><div class="n" id="t-hit-n"></div></div>
+  </section>
+
+  <section class="grid">
+    <div class="card">
+      <h2>Which room stops crews: reached vs cleared</h2>
+      <p class="note">Of the runs that reached each room, how many got through it (the percentage). The Exit room is cleared
+        when the whole crew escaped. A low rate marks the room to look at first: its puzzle or its hints.</p>
+      <div class="legend" id="l-funnel"></div>
+      <div class="chart" id="c-funnel"></div>
+    </div>
+    <div class="card">
+      <h2>Time to clear each room</h2>
+      <p class="note">From the first player entering a room to the first entering the next, one dot per run that cleared it.
+        The box holds the middle half of those runs, the line is the median. A lone dot far above the box is one stuck
+        run, not a slow room.</p>
+      <div class="chart" id="c-room-time"></div>
+    </div>
+    <div class="card wide">
+      <h2>How far runs get, and how they end</h2>
+      <p class="note">Every run, left to right. The grey line is the runs still going; a band that drops off is the runs
+        that stopped there, coloured by how they ended.</p>
+      <div class="legend" id="l-flow"></div>
+      <div class="chart" id="c-flow"></div>
+    </div>
+    <div class="card">
+      <h2>How runs end, by player count</h2>
+      <div class="legend" id="l-outcome"></div>
+      <div class="chart" id="c-outcome"></div>
+    </div>
+    <div class="card">
+      <h2>Vote accuracy, meeting by meeting</h2>
+      <p class="note">The first meeting of each run, the second, and so on. Mage: the crew found the traitor. A weapon: they
+        banished an innocent. Nobody: the vote banished no one. Hits that only come late mean the Mage is hard to read.</p>
+      <div class="legend" id="l-votes"></div>
+      <div class="chart" id="c-votes"></div>
+    </div>
+    <div class="card">
+      <h2>When votes happen</h2>
+      <p class="note">Minute of the run each vote ended in.</p>
+      <div class="chart" id="c-vote-time"></div>
+    </div>
+  </section>
+
+  <details>
+    <summary>Runs table</summary>
+    <div class="table-wrap" id="runs-table"></div>
+  </details>
+
+  <h2 class="section-head">Singleplayer tutorial</h2>
+  <p class="sub">One report per play of the weapons tutorial (TUTORIAL / SINGLEPLAYER on the menu), sent when the player
+    finishes it or leaves. Each step is one of the narrator's instructions; a play is timed from the scene loading.</p>
+
+  <section class="tiles" aria-label="Tutorial numbers">
+    <div class="tile"><div class="label">Tutorial plays</div><div class="value" id="t-tut">–</div><div class="n" id="t-tut-n"></div></div>
+    <div class="tile"><div class="label">Finished it</div><div class="value" id="t-tut-done">–</div><div class="n" id="t-tut-done-n"></div></div>
+    <div class="tile"><div class="label">Typical time to finish</div><div class="value" id="t-tut-length">–</div><div class="n" id="t-tut-length-n"></div></div>
+    <div class="tile"><div class="label">Weapon breaks per play</div><div class="value" id="t-tut-breaks">–</div><div class="n" id="t-tut-breaks-n"></div></div>
+  </section>
+
+  <section class="grid">
+    <div class="card">
+      <h2>Which lesson stops players: reached vs cleared</h2>
+      <p class="note">Of the plays that reached each lesson, how many went on to the next one (the percentage).</p>
+      <div class="legend" id="l-tut-funnel"></div>
+      <div class="chart" id="c-tut-funnel"></div>
+    </div>
+    <div class="card">
+      <h2>Time to clear each lesson</h2>
+      <p class="note">From the lesson's first instruction to the next lesson's, one dot per play that cleared it.</p>
+      <div class="chart" id="c-tut-time"></div>
+    </div>
+    <div class="card wide">
+      <h2>How far players get, step by step</h2>
+      <p class="note">How many plays reached each instruction, in order; the percentage is of all plays. Hover a column
+        for the time spent there and how many players left the tutorial at it.</p>
+      <div class="chart" id="c-tut-steps"></div>
+    </div>
+  </section>
+
+  <details>
+    <summary>Tutorial plays table</summary>
+    <div class="table-wrap" id="tut-table"></div>
+  </details>
+
+  <h2 class="section-head">Physics glitches</h2>
+  <p class="sub">Weapons that fell out of the world, went through a floor, or were shoved further in one physics step than
+    their speed explains. Logged by whichever machine runs that weapon's physics, with any number of players.</p>
+  <div class="filters">
+    <label><input type="checkbox" id="glitch-debug" autocomplete="off"> Include debug pages and the Editor</label>
+  </div>
+
+  <section class="tiles" aria-label="Glitch numbers">
+    <div class="tile"><div class="label">Glitches logged</div><div class="value" id="t-glitches">–</div><div class="n" id="t-glitches-n"></div></div>
+    <div class="tile"><div class="label">Fell out of the world</div><div class="value" id="t-fell">–</div><div class="n" id="t-fell-n"></div></div>
+  </section>
+
+  <section class="grid">
+    <div class="card">
+      <h2>Glitches by room</h2>
+      <div class="legend" id="l-glitch-room"></div>
+      <div class="chart" id="c-glitch-room"></div>
+    </div>
+    <div class="card">
+      <h2>Where in the room</h2>
+      <p class="note">Top-down, in the room's own frame: x across, z up the page (north), metres from the room's centre.
+        <label>Room <select id="glitch-room" autocomplete="off"></select></label></p>
+      <div class="legend" id="l-glitch-map"></div>
+      <div class="chart" id="c-glitch-map"></div>
+    </div>
+  </section>
+
+  <details>
+    <summary>Glitches table</summary>
+    <div class="table-wrap" id="glitch-table"></div>
+  </details>
+</main>
+<div class="tip" id="tip" role="tooltip"></div>
+
+<script>
+(function () {
+  'use strict';
+
+  // The team Sheet's Apps Script (docs/ANALYTICS.md). ?src= overrides it, e.g. a local JSON file for testing.
+  var SHEET_JSON = 'https://script.google.com/macros/s/AKfycbzboCic654g4sF2RMXHVw96riQGhrIO0CUvj85wY3SNDJTUKPpcVT_IlQNA-6pfibhI/exec?format=json';
+  var REFRESH_MS = 60000;
+
+  // Outcomes in a fixed order, each with its own colour slot: a filter never repaints them.
+  var OUTCOMES = [
+    { key: 'Escaped', label: 'Crew escaped', color: 'var(--s1)' },
+    { key: 'TimedOut', label: 'Time ran out', color: 'var(--s2)' },
+    { key: 'WeaponsGone', label: 'Crew voted out', color: 'var(--s3)' },
+    { key: 'Resurrected', label: 'Mage resurrected', color: 'var(--s4)' }
+  ];
+  // Glitch kinds in a fixed order, each with its own colour slot (the first three validate for a scatter).
+  var KINDS = [
+    { key: 'fell_out', label: 'Fell out of the world', color: 'var(--s1)' },
+    { key: 'below_room', label: 'Through the floor', color: 'var(--s2)' },
+    { key: 'jump', label: 'Shoved (jump)', color: 'var(--s3)' }
+  ];
+  var BANISHED = [
+    { key: 'mage', label: 'Mage', color: 'var(--s1)' },
+    { key: 'weapon', label: 'A weapon', color: 'var(--s2)' },
+    { key: 'nobody', label: 'Nobody', color: 'var(--muted)' }
+  ];
+  // A run the host left mid-way has no outcome; it is drawn only with "Include runs the host left mid-way" on.
+  var ABANDONED = { key: 'abandoned', label: 'Host left mid-way', color: 'var(--muted)' };
+  // The run's rooms in run order, by room id: a fixed axis, whatever the data holds. The names are the installed
+  // rooms' (RoomsV3Builder.DisplayNames); older rows carry other labels for the same ids, so rows are matched by id.
+  var ROOMS = [
+    { id: 3, name: 'Hold the Door' },
+    { id: 4, name: 'Cut the Rope' },
+    { id: 5, name: 'Fetch' },
+    { id: 6, name: 'Short Circuit' },
+    { id: 7, name: 'Home Run' }
+  ];
+  // Meetings of a run in order; the third and any later ones share a column.
+  var MEETINGS = ['1st', '2nd', '3rd+'];
+  // The tutorial's lessons and narrator steps in order (TutorialReport.LessonOf / LabelOf). 25 (a weapon broke) is
+  // counted in weapon_breaks, not a step; 40 is the finish.
+  var LESSONS = ['Plate', 'Dagger Lever', 'Cage + Combat', 'Sword Circuit'];
+  var STEPS = [
+    { step: 0, label: 'possess a weapon' }, { step: 1, label: 'launch' }, { step: 2, label: 'weigh the plate' },
+    { step: 3, label: 'plate latched' }, { step: 10, label: 'switch to the Dagger' }, { step: 11, label: 'strike the lever' },
+    { step: 12, label: 'lever hit' }, { step: 20, label: 'call the porter' }, { step: 21, label: 'carried by the porter' },
+    { step: 22, label: 'inside: get Key 1' }, { step: 23, label: 'defeat the guards' }, { step: 24, label: 'guards defeated' },
+    { step: 30, label: 'fetch Key 1' }, { step: 31, label: 'switch to the Sword' }, { step: 32, label: 'seal the circuit' },
+    { step: 33, label: 'repossess the Sword' }, { step: 34, label: 'carry the Sword out' }, { step: 40, label: 'complete' }
+  ];
+  function lessonOf(step) { return step >= 40 ? LESSONS.length : Math.floor(step / 10); }
+
+  var data = { runs: [], rooms: [], votes: [], glitches: [], tutorials: [], tutorial_steps: [] };
+  var $ = function (id) { return document.getElementById(id); };
+
+  function src() {
+    var m = /[?&]src=([^&]+)/.exec(location.search);
+    return m ? decodeURIComponent(m[1]) : SHEET_JSON;
+  }
+
+  // Sheets hands back TRUE/FALSE as booleans, but a hand-edited cell may be text.
+  function bool(v) { return v === true || String(v).toUpperCase() === 'TRUE'; }
+  function num(v) { var n = Number(v); return isFinite(n) ? n : 0; }
+
+  // A room's name by its id; a room not in ROOMS keeps the label its row carried.
+  function roomName(id, fallback) {
+    for (var i = 0; i < ROOMS.length; i++) if (ROOMS[i].id === num(id)) return ROOMS[i].name;
+    return fallback ? String(fallback) : 'Room ' + id;
+  }
+
+  function legend(id, items) {
+    $(id).innerHTML = items.map(function (o) {
+      return '<span><i style="background:' + o.color + '"></i>' + o.label + '</span>';
+    }).join('');
+  }
+
+  function load() {
+    $('refresh').disabled = true;
+    fetch(src(), { cache: 'no-store' })
+      .then(function (r) {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r.json();
+      })
+      .then(function (json) {
+        data = {
+          runs: (json.runs || []).filter(function (r) { return r.run_id; }),
+          rooms: json.rooms || [],
+          votes: json.votes || [],
+          glitches: (json.glitches || []).filter(function (g) { return g.glitch_id; }),
+          tutorials: (json.tutorials || []).filter(function (t) { return t.tut_id; }),
+          tutorial_steps: json.tutorial_steps || []
+        };
+        status('');
+        $('updated').textContent = 'Updated ' + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + ' · ';
+        fillBuilds();
+        render();
+      })
+      .catch(function (e) {
+        status('Could not load the Sheet (' + e.message + '). Brave Shields and some ad blockers block script.google.com: '
+          + 'turn them off for this page. If the Apps Script was just changed, it needs a new version of its deployment.', true);
+      })
+      .then(function () { $('refresh').disabled = false; });
+  }
+
+  function status(text, error) {
+    var el = $('status');
+    el.hidden = !text;
+    el.textContent = text;
+    el.className = 'status' + (error ? ' error' : '');
+  }
+
+  function fillBuilds() {
+    var sel = $('build');
+    var keep = sel.value;
+    var builds = {};
+    data.runs.forEach(function (r) { builds[String(r.build)] = true; });
+    data.glitches.forEach(function (g) { builds[String(g.build)] = true; });
+    data.tutorials.forEach(function (t) { builds[String(t.build)] = true; });
+    sel.length = 1;
+    Object.keys(builds).sort().forEach(function (b) {
+      var o = document.createElement('option');
+      o.value = b;
+      o.textContent = b;
+      sel.appendChild(o);
+    });
+    sel.value = builds[keep] ? keep : '';
+  }
+
+  // ---------------------------------------------------------------- the numbers
+
+  function render() {
+    var build = $('build').value;
+    var withAbandoned = $('abandoned').checked;
+    var runs = data.runs.filter(function (r) {
+      return (!build || String(r.build) === build) && (withAbandoned || r.ended === 'result');
+    });
+    var ids = {};
+    runs.forEach(function (r) { ids[r.run_id] = r; });
+    var rooms = data.rooms.filter(function (r) { return ids[r.run_id]; });
+    var votes = data.votes.filter(function (v) { return ids[v.run_id]; });
+    var finished = runs.filter(function (r) { return r.ended === 'result'; });
+
+    tiles(runs, finished, votes);
+    roomCharts(rooms, runs);
+    flowChart(runs);
+    outcomeChart(finished);
+    voteCharts(votes);
+    table(runs);
+    tutorial(build);
+    glitches(build);
+  }
+
+  function pct(a, b) { return b ? Math.round(100 * a / b) + '%' : '–'; }
+  function plural(n, word) { return n + ' ' + word + (n === 1 ? '' : 's'); }
+  function clock(s) {
+    s = Math.round(s);
+    return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+  }
+  function median(xs) {
+    if (!xs.length) return 0;
+    var s = xs.slice().sort(function (a, b) { return a - b; });
+    var m = Math.floor(s.length / 2);
+    return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+  }
+
+  function tiles(runs, finished, votes) {
+    var abandoned = runs.length - finished.length;
+    $('t-runs').textContent = runs.length;
+    $('t-runs-n').textContent = plural(finished.length, 'finished run') + (abandoned ? ', ' + abandoned + ' left mid-way' : '');
+
+    var escaped = finished.filter(function (r) { return r.outcome === 'Escaped'; }).length;
+    $('t-escape').textContent = pct(escaped, finished.length);
+    $('t-escape-n').textContent = escaped + ' of ' + plural(finished.length, 'finished run');
+
+    var lengths = finished.map(function (r) { return num(r.duration_s); });
+    $('t-length').textContent = lengths.length ? clock(median(lengths)) : '–';
+    $('t-length-n').textContent = lengths.length ? 'median of ' + plural(lengths.length, 'finished run') : 'no finished runs';
+
+    var voted = runs.filter(function (r) { return num(r.votes_called) > 0; });
+    var caught = voted.filter(function (r) { return bool(r.mage_banished); }).length;
+    $('t-caught').textContent = pct(caught, voted.length);
+    $('t-caught-n').textContent = caught + ' of ' + plural(voted.length, 'run') + ' that held a vote';
+
+    // Per vote, not per run: a run can hold several votes and the Mage is caught at most once.
+    var hits = votes.filter(function (v) { return v.banished === 'mage'; }).length;
+    $('t-hit').textContent = pct(hits, votes.length);
+    $('t-hit-n').textContent = hits + ' of ' + plural(votes.length, 'vote');
+  }
+
+  // One entry per room of ROOMS, in run order, matched by room id: how many runs reached it, how many cleared
+  // it, and the seconds each clearing took.
+  function roomGroups(rooms) {
+    var groups = ROOMS.map(function (r, i) {
+      return { id: r.id, label: 'Room ' + (i + 1), name: r.name, reached: 0, cleared: [] };
+    });
+    rooms.forEach(function (r) {
+      var g = groups.filter(function (x) { return x.id === num(r.room_id); })[0];
+      if (!g) return;
+      g.reached++;
+      if (bool(r.cleared)) g.cleared.push(num(r.seconds));
+    });
+    return groups;
+  }
+
+  function roomCharts(rooms, runs) {
+    var groups = roomGroups(rooms);
+    // The Exit room has no rooms row: a run reached it when rooms_reached passed rooms_total, and cleared it
+    // when the whole crew escaped.
+    var atExit = runs.filter(function (r) { return num(r.rooms_reached) > num(r.rooms_total); });
+    var exitCleared = atExit.filter(function (r) { return r.outcome === 'Escaped'; }).length;
+
+    var series = [
+      { label: 'Reached', color: 'var(--muted)' },
+      { label: 'Cleared', color: 'var(--s1)' }
+    ];
+    legend('l-funnel', series);
+    var cats = groups.map(function (g) {
+      return { label: g.label, sub: g.name, values: [g.reached, g.cleared.length], text: g.reached ? pct(g.cleared.length, g.reached) : '',
+        tip: '<b>' + esc(g.label + ': ' + g.name) + '</b>' + plural(g.reached, 'run') + ' reached it<br>'
+          + g.cleared.length + ' cleared it (' + pct(g.cleared.length, g.reached) + ')' };
+    });
+    cats.push({ label: 'Exit', sub: 'escape', values: [atExit.length, exitCleared], text: atExit.length ? pct(exitCleared, atExit.length) : '',
+      tip: '<b>Exit room</b>' + plural(atExit.length, 'run') + ' reached it<br>' + exitCleared + ' escaped (' + pct(exitCleared, atExit.length) + ')' });
+    grouped($('c-funnel'), runs.length ? cats : [], series, 'No runs yet.');
+
+    boxes($('c-room-time'), groups.map(function (g) {
+      var s = g.cleared.slice().sort(function (a, b) { return a - b; });
+      return { label: g.label, sub: g.name, values: s,
+        tip: '<b>' + esc(g.label + ': ' + g.name) + '</b>' + (s.length
+          ? plural(s.length, 'run') + ' cleared it<br>median ' + clock(quantile(s, 0.5)) + ', fastest ' + clock(s[0]) + ', slowest ' + clock(s[s.length - 1])
+          : 'nobody has cleared it yet') };
+    }), rooms.length ? '' : 'No rooms recorded yet.');
+  }
+
+  // Every run is at one stage when it stops: 0 Start (never entered room 1), 1..n a room, n + 1 the Exit room,
+  // n + 2 escaped. A Sankey-style flow: the line along the top is the runs still going, each drop-off band the
+  // runs that stopped at that stage, split by how they ended.
+  function flowChart(runs) {
+    var n = ROOMS.length;
+    var stages = ['Start'].concat(ROOMS.map(function (r, i) { return 'Room ' + (i + 1); }), ['Exit', 'Escaped']);
+    var names = [''].concat(ROOMS.map(function (r) { return r.name; }), ['', '']);
+    var kinds = OUTCOMES.filter(function (o) { return o.key !== 'Escaped'; }).concat([ABANDONED]);
+    var stops = stages.map(function () { return {}; });
+    var used = {};
+    runs.forEach(function (r) {
+      var at = r.outcome === 'Escaped' ? n + 2 : Math.max(0, Math.min(n + 1, num(r.rooms_reached)));
+      if (at === n + 2) { stops[at].Escaped = (stops[at].Escaped || 0) + 1; return; }
+      var key = r.ended === 'result' ? r.outcome : ABANDONED.key;
+      stops[at][key] = (stops[at][key] || 0) + 1;
+      used[key] = true;
+    });
+    legend('l-flow', (stops[n + 2].Escaped ? [OUTCOMES[0]] : []).concat(kinds.filter(function (k) { return used[k.key]; })));
+    flow($('c-flow'), stages, names, stops, kinds, runs.length);
+  }
+
+  function outcomeChart(finished) {
+    // Only the outcomes that happened get a legend entry; each keeps its own fixed colour either way.
+    var seen = {};
+    finished.forEach(function (r) { seen[r.outcome] = true; });
+    var legend = $('l-outcome');
+    legend.innerHTML = OUTCOMES.filter(function (o) { return seen[o.key]; }).map(function (o) {
+      return '<span><i style="background:' + o.color + '"></i>' + o.label + '</span>';
+    }).join('');
+    var by = {};
+    finished.forEach(function (r) {
+      var p = num(r.players_start);
+      var g = by[p] || (by[p] = { total: 0 });
+      g[r.outcome] = (g[r.outcome] || 0) + 1;
+      g.total++;
+    });
+    var cats = Object.keys(by).map(Number).sort(function (a, b) { return a - b; }).map(function (p) {
+      var g = by[p];
+      return {
+        label: p + ' players',
+        segments: OUTCOMES.map(function (o) { return { value: g[o.key] || 0, color: o.color, label: o.label }; }),
+        tip: '<b>' + p + ' players</b>' + OUTCOMES.filter(function (o) { return g[o.key]; }).map(function (o) {
+          return o.label + ': ' + g[o.key] + ' (' + pct(g[o.key], g.total) + ')';
+        }).join('<br>')
+      };
+    });
+    stacked($('c-outcome'), cats, 'No finished runs yet.');
+  }
+
+  function voteCharts(votes) {
+    legend('l-votes', BANISHED);
+    var by = MEETINGS.map(function () { return { total: 0 }; });
+    votes.forEach(function (v) {
+      var g = by[Math.max(0, Math.min(MEETINGS.length, num(v.n)) - 1)];
+      g[v.banished] = (g[v.banished] || 0) + 1;
+      g.total++;
+    });
+    stacked($('c-votes'), votes.length ? MEETINGS.map(function (m, i) {
+      var g = by[i];
+      return {
+        label: m + ' meeting',
+        segments: BANISHED.map(function (b) { return { value: g[b.key] || 0, color: b.color, label: b.label }; }),
+        tip: '<b>' + m + ' meeting of a run</b>' + (g.total ? BANISHED.filter(function (b) { return g[b.key]; }).map(function (b) {
+          return b.label + ': ' + g[b.key] + ' (' + pct(g[b.key], g.total) + ')';
+        }).join('<br>') : 'no run held one')
+      };
+    }) : [], 'No votes yet.');
+
+    var minutes = {};
+    var last = 0;
+    votes.forEach(function (v) {
+      var m = Math.floor(num(v.at_s) / 60);
+      minutes[m] = (minutes[m] || 0) + 1;
+      if (m > last) last = m;
+    });
+    var cats = [];
+    for (var m = 0; votes.length && m <= last; m++) {
+      var n = minutes[m] || 0;
+      cats.push({ label: m + '–' + (m + 1), value: n, text: n ? String(n) : '',
+        tip: '<b>Minute ' + m + '–' + (m + 1) + '</b>' + plural(n, 'vote') });
+    }
+    bars($('c-vote-time'), cats, { format: function (v) { return String(Math.round(v)); }, integer: true, empty: 'No votes yet.' });
+  }
+
+  function table(runs) {
+    var cols = ['run_id', 'received_at', 'build', 'players_start', 'players_end', 'outcome', 'ended',
+      'duration_s', 'rooms_reached', 'rooms_total', 'votes_called', 'mage_banished'];
+    var numeric = { players_start: 1, players_end: 1, duration_s: 1, rooms_reached: 1, rooms_total: 1, votes_called: 1 };
+    var html = '<table><thead><tr>' + cols.map(function (c) { return '<th>' + c + '</th>'; }).join('') + '</tr></thead><tbody>';
+    runs.slice().reverse().forEach(function (r) {
+      html += '<tr>' + cols.map(function (c) {
+        return '<td' + (numeric[c] ? ' class="num"' : '') + '>' + esc(r[c] === undefined ? '' : String(r[c])) + '</td>';
+      }).join('') + '</tr>';
+    });
+    $('runs-table').innerHTML = html + '</tbody></table>' + (runs.length ? '' : '<p class="empty">No runs.</p>');
+  }
+
+  // ---------------------------------------------------------------- the singleplayer tutorial
+
+  function tutorial(build) {
+    var plays = data.tutorials.filter(function (t) { return !build || String(t.build) === build; });
+    var byId = {};
+    plays.forEach(function (t) { byId[t.tut_id] = { play: t, steps: {} }; });
+    data.tutorial_steps.forEach(function (s) {
+      var p = byId[s.tut_id];
+      if (p) p.steps[num(s.step)] = s;
+    });
+    var all = Object.keys(byId).map(function (id) { return byId[id]; });
+    var done = plays.filter(function (t) { return t.outcome === 'completed'; });
+
+    $('t-tut').textContent = plays.length;
+    $('t-tut-n').textContent = (plays.length - done.length) + ' left before the end';
+    $('t-tut-done').textContent = pct(done.length, plays.length);
+    $('t-tut-done-n').textContent = done.length + ' of ' + plural(plays.length, 'play');
+    var lengths = done.map(function (t) { return num(t.duration_s); });
+    $('t-tut-length').textContent = lengths.length ? clock(median(lengths)) : '–';
+    $('t-tut-length-n').textContent = lengths.length ? 'median of ' + plural(lengths.length, 'finished play') : 'nobody has finished yet';
+    var breaks = plays.reduce(function (a, t) { return a + num(t.weapon_breaks); }, 0);
+    $('t-tut-breaks').textContent = plays.length ? (breaks / plays.length).toFixed(1) : '–';
+    $('t-tut-breaks-n').textContent = plural(breaks, 'break') + ' in all';
+
+    // A lesson starts at its first step reached; it is cleared when a later lesson (or the finish) was reached.
+    function startOf(p, lesson) {
+      var t = null;
+      Object.keys(p.steps).forEach(function (k) {
+        if (lessonOf(num(k)) === lesson) t = t === null ? num(p.steps[k].reached_s) : Math.min(t, num(p.steps[k].reached_s));
+      });
+      return t;
+    }
+    var groups = LESSONS.map(function (name, i) {
+      var g = { name: name, reached: 0, times: [] };
+      all.forEach(function (p) {
+        var start = startOf(p, i);
+        if (start === null) return;
+        g.reached++;
+        for (var j = i + 1; j <= LESSONS.length; j++) {
+          var next = startOf(p, j);
+          if (next !== null) { g.times.push(Math.max(0, next - start)); return; }
+        }
+        if (p.play.outcome === 'completed') g.times.push(Math.max(0, num(p.play.duration_s) - start));
+      });
+      g.times.sort(function (a, b) { return a - b; });
+      return g;
+    });
+
+    var series = [
+      { label: 'Reached', color: 'var(--muted)' },
+      { label: 'Cleared', color: 'var(--s1)' }
+    ];
+    legend('l-tut-funnel', series);
+    grouped($('c-tut-funnel'), plays.length ? groups.map(function (g, i) {
+      return { label: 'Lesson ' + (i + 1), sub: g.name, values: [g.reached, g.times.length], text: g.reached ? pct(g.times.length, g.reached) : '',
+        tip: '<b>' + esc(g.name) + '</b>' + plural(g.reached, 'play') + ' reached it<br>' + g.times.length + ' cleared it (' + pct(g.times.length, g.reached) + ')' };
+    }) : [], series, 'No tutorial plays yet.');
+
+    boxes($('c-tut-time'), groups.map(function (g, i) {
+      var s = g.times;
+      return { label: 'Lesson ' + (i + 1), sub: g.name, values: s,
+        tip: '<b>' + esc(g.name) + '</b>' + (s.length
+          ? plural(s.length, 'play') + ' cleared it<br>median ' + clock(quantile(s, 0.5)) + ', fastest ' + clock(s[0]) + ', slowest ' + clock(s[s.length - 1])
+          : 'nobody has cleared it yet') };
+    }), plays.length ? '' : 'No tutorial plays yet.');
+
+    bars($('c-tut-steps'), plays.length ? STEPS.map(function (st, i) {
+      var reached = all.filter(function (p) { return p.steps[st.step]; });
+      var spent = reached.map(function (p) { return num(p.steps[st.step].seconds); }).sort(function (a, b) { return a - b; });
+      var left = plays.filter(function (t) { return t.outcome !== 'completed' && num(t.last_step) === st.step; }).length;
+      var first = !i || lessonOf(STEPS[i - 1].step) !== lessonOf(st.step);
+      return { label: st.label, sub: first ? (LESSONS[lessonOf(st.step)] || '') : '', value: reached.length, text: pct(reached.length, plays.length),
+        tip: '<b>' + esc(st.label) + '</b>' + plural(reached.length, 'play') + ' got here (' + pct(reached.length, plays.length) + ')'
+          + (spent.length && st.step !== 40 ? '<br>median ' + clock(quantile(spent, 0.5)) + ' spent here' : '')
+          + (st.step !== 40 ? '<br>' + left + ' left the tutorial here' : '') };
+    }) : [], { format: function (v) { return String(Math.round(v)); }, integer: true, empty: 'No tutorial plays yet.' });
+
+    var cols = ['tut_id', 'received_at', 'build', 'outcome', 'duration_s', 'last_lesson', 'last_step', 'steps_reached',
+      'weapon_breaks', 'possessions'];
+    var numeric = { duration_s: 1, last_step: 1, steps_reached: 1, weapon_breaks: 1, possessions: 1 };
+    var html = '<table><thead><tr>' + cols.map(function (c) { return '<th>' + c + '</th>'; }).join('') + '</tr></thead><tbody>';
+    plays.slice().reverse().forEach(function (t) {
+      html += '<tr>' + cols.map(function (c) {
+        return '<td' + (numeric[c] ? ' class="num"' : '') + '>' + esc(t[c] === undefined ? '' : String(t[c])) + '</td>';
+      }).join('') + '</tr>';
+    });
+    $('tut-table').innerHTML = html + '</tbody></table>' + (plays.length ? '' : '<p class="empty">No tutorial plays.</p>');
+  }
+
+  // ---------------------------------------------------------------- glitches
+
+  function glitches(build) {
+    var withDebug = $('glitch-debug').checked;
+    var list = data.glitches.filter(function (g) {
+      return (!build || String(g.build) === build) && (withDebug || !bool(g.debug));
+    });
+    var sessions = {};
+    list.forEach(function (g) { sessions[g.session] = true; });
+    $('t-glitches').textContent = list.length;
+    $('t-glitches-n').textContent = 'from ' + plural(Object.keys(sessions).length, 'session');
+    var fell = list.filter(function (g) { return g.kind === 'fell_out'; }).length;
+    $('t-fell').textContent = fell;
+    $('t-fell-n').textContent = list.length ? pct(fell, list.length) + ' of all glitches' : 'none yet';
+
+    // Only the kinds that happened get a legend entry; each keeps its fixed colour either way.
+    var seen = {};
+    list.forEach(function (g) { seen[g.kind] = true; });
+    var legend = KINDS.filter(function (k) { return seen[k.key]; }).map(function (k) {
+      return '<span><i style="background:' + k.color + '"></i>' + k.label + '</span>';
+    }).join('');
+    $('l-glitch-room').innerHTML = legend;
+
+    var byRoom = {};
+    list.forEach(function (g) {
+      var name = glitchRoom(g);
+      var r = byRoom[name] || (byRoom[name] = { total: 0 });
+      r[g.kind] = (r[g.kind] || 0) + 1;
+      r.total++;
+    });
+    var names = Object.keys(byRoom).sort(function (a, b) { return byRoom[b].total - byRoom[a].total; });
+    stacked($('c-glitch-room'), names.map(function (name) {
+      var r = byRoom[name];
+      return {
+        label: name,
+        segments: KINDS.map(function (k) { return { value: r[k.key] || 0, color: k.color, label: k.label }; }),
+        tip: '<b>' + esc(name) + '</b>' + KINDS.filter(function (k) { return r[k.key]; }).map(function (k) {
+          return k.label + ': ' + r[k.key];
+        }).join('<br>')
+      };
+    }), 'No glitches logged.');
+
+    // The room picker keeps its choice across refreshes while that room still has glitches.
+    var sel = $('glitch-room');
+    var keep = sel.value;
+    var mapped = names.filter(function (n) { return n !== 'No room'; });
+    sel.innerHTML = mapped.map(function (n) { return '<option>' + esc(n) + '</option>'; }).join('');
+    if (mapped.indexOf(keep) >= 0) sel.value = keep;
+    $('l-glitch-map').innerHTML = legend;
+    roomMap($('c-glitch-map'), list.filter(function (g) { return glitchRoom(g) === sel.value; }));
+    glitchTable(list);
+  }
+
+  function glitchRoom(g) {
+    if (!g.room && g.room_id === '') return 'No room';
+    return g.room_id !== '' && g.room_id !== undefined ? roomName(g.room_id, g.room) : String(g.room || 'No room');
+  }
+
+  // Top-down dots in the room's own frame: x across, z up the page.
+  function roomMap(host, points) {
+    if (!points.length) { host.innerHTML = '<p class="empty">No glitches with a room.</p>'; return; }
+    host.innerHTML = '';
+    var W = Math.max(280, host.clientWidth), side = Math.min(W - LEFT - 8, 360);
+    var size = side + TOP + BOTTOM;
+    var reach = 10;
+    points.forEach(function (g) { reach = Math.max(reach, Math.abs(num(g.local_x)), Math.abs(num(g.local_z))); });
+    reach = Math.ceil(reach / 5) * 5;
+    var svg = el('svg', { viewBox: '0 0 ' + W + ' ' + size, height: size, role: 'img' }, host);
+    var x0 = LEFT + (W - LEFT - 8 - side) / 2;
+    function px(x) { return x0 + (x + reach) / (2 * reach) * side; }
+    function py(z) { return TOP + (reach - z) / (2 * reach) * side; }
+    el('rect', { x: x0, y: TOP, width: side, height: side, fill: 'none', stroke: 'var(--grid)', 'stroke-width': 1 }, svg);
+    el('line', { x1: px(0), x2: px(0), y1: TOP, y2: TOP + side, stroke: 'var(--grid)', 'stroke-width': 1 }, svg);
+    el('line', { x1: x0, x2: x0 + side, y1: py(0), y2: py(0), stroke: 'var(--grid)', 'stroke-width': 1 }, svg);
+    el('text', { x: x0 - 6, y: TOP + 4, 'text-anchor': 'end' }, svg).textContent = '+' + reach;
+    el('text', { x: x0 - 6, y: TOP + side + 4, 'text-anchor': 'end' }, svg).textContent = '−' + reach;
+    el('text', { x: x0, y: TOP + side + 16, 'text-anchor': 'start' }, svg).textContent = '−' + reach + ' m';
+    el('text', { x: x0 + side, y: TOP + side + 16, 'text-anchor': 'end' }, svg).textContent = '+' + reach + ' m';
+    el('text', { x: px(0), y: TOP - 6, 'text-anchor': 'middle' }, svg).textContent = 'north';
+    var color = {};
+    KINDS.forEach(function (k) { color[k.key] = k.color; });
+    points.forEach(function (g) {
+      var dot = el('circle', { class: 'dot', cx: px(num(g.local_x)), cy: py(num(g.local_z)), r: 5, fill: color[g.kind] || 'var(--muted)' }, svg);
+      var kind = KINDS.filter(function (k) { return k.key === g.kind; })[0];
+      var tip = '<b>' + esc(kind ? kind.label : g.kind) + '</b>' + esc(g.weapon) + ' (' + esc(g.held) + ')<br>'
+        + 'x ' + num(g.local_x).toFixed(1) + ', y ' + num(g.local_y).toFixed(1) + ', z ' + num(g.local_z).toFixed(1)
+        + (g.last_contact ? '<br>last touched ' + esc(g.last_contact) : '') + '<br>' + esc(g.at);
+      // A hit target bigger than the dot.
+      var hitDot = el('circle', { cx: px(num(g.local_x)), cy: py(num(g.local_z)), r: 10, fill: 'transparent' }, svg);
+      hitDot.addEventListener('mousemove', function (e) { showTip(e, tip); });
+      hitDot.addEventListener('mouseleave', hideTip);
+    });
+  }
+
+  function glitchTable(list) {
+    var cols = ['at', 'kind', 'weapon', 'held', 'room', 'local_x', 'local_y', 'local_z', 'x', 'y', 'z', 'speed',
+      'jump_m', 'last_contact', 'role', 'players', 'scene', 'build', 'debug'];
+    var numeric = { local_x: 1, local_y: 1, local_z: 1, x: 1, y: 1, z: 1, speed: 1, jump_m: 1, players: 1 };
+    var html = '<table><thead><tr>' + cols.map(function (c) { return '<th>' + c + '</th>'; }).join('') + '</tr></thead><tbody>';
+    list.slice().reverse().forEach(function (g) {
+      html += '<tr>' + cols.map(function (c) {
+        return '<td' + (numeric[c] ? ' class="num"' : '') + '>' + esc(g[c] === undefined ? '' : String(g[c])) + '</td>';
+      }).join('') + '</tr>';
+    });
+    $('glitch-table').innerHTML = html + '</tbody></table>' + (list.length ? '' : '<p class="empty">No glitches.</p>');
+  }
+
+  // ---------------------------------------------------------------- the charts (plain SVG)
+
+  var SVG = 'http://www.w3.org/2000/svg';
+  var H = 220, TOP = 18, BOTTOM = 34, LEFT = 40, BAR = 24;
+
+  function el(name, attrs, parent) {
+    var e = document.createElementNS(SVG, name);
+    for (var k in attrs) e.setAttribute(k, attrs[k]);
+    if (parent) parent.appendChild(e);
+    return e;
+  }
+
+  function esc(s) {
+    return String(s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; });
+  }
+
+  // A tidy axis maximum and four steps under it.
+  function niceMax(v, integer) {
+    if (v <= 0) return integer ? 4 : 1;
+    var step = Math.pow(10, Math.floor(Math.log10(v / 4)));
+    var choices = [1, 2, 2.5, 5, 10];
+    for (var i = 0; i < choices.length; i++) {
+      var s = choices[i] * step;
+      if (integer && s < 1) continue;
+      if (s * 4 >= v) return s * 4;
+    }
+    return Math.ceil(v);
+  }
+
+  // A column: square at the baseline, 4px rounded at its data end.
+  function column(x, y, w, h) {
+    var r = Math.min(4, h, w / 2);
+    return 'M' + x + ',' + (y + h) + 'V' + (y + r) + 'Q' + x + ',' + y + ' ' + (x + r) + ',' + y
+      + 'H' + (x + w - r) + 'Q' + (x + w) + ',' + y + ' ' + (x + w) + ',' + (y + r) + 'V' + (y + h) + 'Z';
+  }
+
+  function frame(host, cats, max, format) {
+    host.innerHTML = '';
+    var W = Math.max(280, host.clientWidth);
+    var svg = el('svg', { viewBox: '0 0 ' + W + ' ' + H, height: H, role: 'img' }, host);
+    var plotW = W - LEFT - 8, plotH = H - TOP - BOTTOM;
+    for (var i = 0; i <= 4; i++) {
+      var y = TOP + plotH - plotH * i / 4;
+      el('line', { x1: LEFT, x2: W - 8, y1: y, y2: y, stroke: i ? 'var(--grid)' : 'var(--axis)', 'stroke-width': 1 }, svg);
+      el('text', { x: LEFT - 6, y: y + 4, 'text-anchor': 'end' }, svg).textContent = format(max * i / 4);
+    }
+    var band = plotW / cats.length;
+    // Every column keeps its label, shortened with an ellipsis to fit; labels are skipped only when the
+    // columns are too narrow for even a few characters (a long run of minutes).
+    var every = band >= 36 ? 1 : Math.ceil(36 / band);
+    cats.forEach(function (c, i) {
+      if (i % every) return;
+      var label = el('text', { x: LEFT + band * (i + 0.5), y: H - BOTTOM + 16, 'text-anchor': 'middle' }, svg);
+      var max = Math.floor(band * every / 6.5);
+      label.textContent = c.label.length > max ? c.label.slice(0, Math.max(3, max - 1)) + '…' : c.label;
+      // An optional second line (a room's name under its position).
+      if (c.sub) {
+        var sub = el('text', { x: LEFT + band * (i + 0.5), y: H - BOTTOM + 29, 'text-anchor': 'middle' }, svg);
+        sub.textContent = c.sub.length > max ? c.sub.slice(0, Math.max(3, max - 1)) + '…' : c.sub;
+      }
+    });
+    return { svg: svg, band: band, plotH: plotH, bar: Math.min(BAR, band * 0.6) };
+  }
+
+  function hit(svg, x, w, tip) {
+    var r = el('rect', { class: 'hit', x: x, y: TOP, width: w, height: H - TOP - BOTTOM }, svg);
+    r.addEventListener('mousemove', function (e) { showTip(e, tip); });
+    r.addEventListener('mouseleave', hideTip);
+  }
+
+  function bars(host, cats, opt) {
+    if (!cats.length) { host.innerHTML = '<p class="empty">' + opt.empty + '</p>'; return; }
+    var max = niceMax(Math.max.apply(null, cats.map(function (c) { return c.value; })), opt.integer);
+    var f = frame(host, cats, max, opt.format);
+    cats.forEach(function (c, i) {
+      var h = f.plotH * c.value / max;
+      var x = LEFT + f.band * (i + 0.5) - f.bar / 2;
+      var y = TOP + f.plotH - h;
+      if (h > 0) el('path', { d: column(x, y, f.bar, h), fill: 'var(--s1)' }, f.svg);
+      if (c.text) el('text', { class: 'value', x: x + f.bar / 2, y: y - 5, 'text-anchor': 'middle' }, f.svg).textContent = c.text;
+      hit(f.svg, LEFT + f.band * i, f.band, c.tip);
+    });
+  }
+
+  function stacked(host, cats, empty) {
+    if (!cats.length) { host.innerHTML = '<p class="empty">' + empty + '</p>'; return; }
+    var totals = cats.map(function (c) { return c.segments.reduce(function (a, s) { return a + s.value; }, 0); });
+    var max = niceMax(Math.max.apply(null, totals), true);
+    var f = frame(host, cats, max, function (v) { return String(Math.round(v)); });
+    var GAP = 2;
+    cats.forEach(function (c, i) {
+      var x = LEFT + f.band * (i + 0.5) - f.bar / 2;
+      var base = TOP + f.plotH;
+      var shown = c.segments.filter(function (s) { return s.value > 0; });
+      shown.forEach(function (s, k) {
+        var h = f.plotH * s.value / max;
+        var top = k === shown.length - 1;
+        var y = base - h;
+        var drawH = Math.max(1, h - (k ? GAP : 0));
+        el('path', { d: top ? column(x, y, f.bar, drawH) : 'M' + x + ',' + y + 'h' + f.bar + 'v' + drawH + 'h' + -f.bar + 'Z', fill: s.color }, f.svg);
+        if (h >= 16) el('text', { class: 'inbar', x: x + f.bar / 2, y: y + drawH / 2 + 4, 'text-anchor': 'middle' }, f.svg).textContent = s.value;
+        base = y;
+      });
+      el('text', { class: 'value', x: x + f.bar / 2, y: base - 5, 'text-anchor': 'middle' }, f.svg).textContent = totals[i];
+      hit(f.svg, LEFT + f.band * i, f.band, c.tip);
+    });
+  }
+
+  // Two or more columns side by side per category, one per series (e.g. reached and cleared); c.text above them.
+  function grouped(host, cats, series, empty) {
+    if (!cats.length) { host.innerHTML = '<p class="empty">' + empty + '</p>'; return; }
+    var max = niceMax(Math.max.apply(null, cats.map(function (c) { return Math.max.apply(null, c.values); })), true);
+    var f = frame(host, cats, max, function (v) { return String(Math.round(v)); });
+    var w = Math.min(BAR, f.band * 0.7 / series.length), GAP = 2;
+    cats.forEach(function (c, i) {
+      var x0 = LEFT + f.band * (i + 0.5) - (w * series.length + GAP * (series.length - 1)) / 2;
+      var top = TOP + f.plotH;
+      series.forEach(function (s, k) {
+        var h = f.plotH * c.values[k] / max;
+        var y = TOP + f.plotH - h;
+        if (h > 0) el('path', { d: column(x0 + k * (w + GAP), y, w, h), fill: s.color }, f.svg);
+        top = Math.min(top, y);
+      });
+      if (c.text) el('text', { class: 'value', x: LEFT + f.band * (i + 0.5), y: top - 5, 'text-anchor': 'middle' }, f.svg).textContent = c.text;
+      hit(f.svg, LEFT + f.band * i, f.band, c.tip);
+    });
+  }
+
+  // The q-th quantile of a sorted list, interpolated between neighbours.
+  function quantile(s, q) {
+    var p = (s.length - 1) * q, lo = Math.floor(p), hi = Math.ceil(p);
+    return s[lo] + (s[hi] - s[lo]) * (p - lo);
+  }
+
+  // Parallel box plots on a time axis, one per category (c.values sorted ascending): the box from the first to the
+  // third quartile, the median across it, whiskers to the furthest value within 1.5 box-lengths, and every value
+  // as a dot so a handful of runs is never hidden behind a box.
+  function boxes(host, cats, empty) {
+    if (empty) { host.innerHTML = '<p class="empty">' + empty + '</p>'; return; }
+    var all = [];
+    cats.forEach(function (c) { all = all.concat(c.values); });
+    var max = niceMax(all.length ? Math.max.apply(null, all) : 60, false);
+    var f = frame(host, cats, max, clock);
+    function y(v) { return TOP + f.plotH - f.plotH * v / max; }
+    cats.forEach(function (c, i) {
+      var cx = LEFT + f.band * (i + 0.5), s = c.values, w = f.bar;
+      if (!s.length) {
+        el('text', { class: 'value', x: cx, y: TOP + f.plotH - 5, 'text-anchor': 'middle' }, f.svg).textContent = 'none';
+      } else {
+        if (s.length >= 3) {
+          var q1 = quantile(s, 0.25), q3 = quantile(s, 0.75), reach = 1.5 * (q3 - q1);
+          var lo = s.filter(function (v) { return v >= q1 - reach; })[0], hi = s.filter(function (v) { return v <= q3 + reach; }).pop();
+          el('line', { x1: cx, x2: cx, y1: y(lo), y2: y(q1), stroke: 'var(--s1)', 'stroke-width': 1.5 }, f.svg);
+          el('line', { x1: cx, x2: cx, y1: y(q3), y2: y(hi), stroke: 'var(--s1)', 'stroke-width': 1.5 }, f.svg);
+          el('line', { x1: cx - w / 4, x2: cx + w / 4, y1: y(lo), y2: y(lo), stroke: 'var(--s1)', 'stroke-width': 1.5 }, f.svg);
+          el('line', { x1: cx - w / 4, x2: cx + w / 4, y1: y(hi), y2: y(hi), stroke: 'var(--s1)', 'stroke-width': 1.5 }, f.svg);
+          el('rect', { x: cx - w / 2, y: y(q3), width: w, height: Math.max(1, y(q1) - y(q3)), rx: 3,
+            fill: 'var(--s1)', 'fill-opacity': 0.18, stroke: 'var(--s1)', 'stroke-width': 1.5 }, f.svg);
+        }
+        var med = quantile(s, 0.5);
+        el('line', { x1: cx - w / 2, x2: cx + w / 2, y1: y(med), y2: y(med), stroke: 'var(--ink)', 'stroke-width': 2 }, f.svg);
+        // The dots fan out sideways a little so equal times do not hide each other.
+        s.forEach(function (v, k) {
+          var dx = s.length > 1 ? (k / (s.length - 1) - 0.5) * w * 0.8 : 0;
+          el('circle', { class: 'dot', cx: cx + dx, cy: y(v), r: 3.5, fill: 'var(--s1)' }, f.svg);
+        });
+        el('text', { class: 'value', x: cx, y: y(s[s.length - 1]) - 8, 'text-anchor': 'middle' }, f.svg).textContent = 'n=' + s.length;
+      }
+      hit(f.svg, LEFT + f.band * i, f.band, c.tip);
+    });
+  }
+
+  // The run flow: one node per stage along the top, the grey line between them as thick as the runs still going,
+  // and under each stage the runs that stopped there, one coloured band per way of ending, bending down from the
+  // node to a stack of their own. stops[i] maps an outcome key to how many runs stopped at stage i.
+  function flow(host, stages, names, stops, kinds, total) {
+    if (!total) { host.innerHTML = '<p class="empty">No runs yet.</p>'; return; }
+    host.innerHTML = '';
+    var W = Math.max(320, host.clientWidth), NODE = 8;
+    var step = (W - 24 - NODE) / (stages.length - 1), x0 = 12;
+    var y0 = 34, band = 110, k = band / total, dropTop = y0 + band + 40;
+    var still = [];
+    var left = total, deepest = 0;
+    stages.forEach(function (s, i) {
+      still.push(left);
+      var stopped = 0;
+      var depth = 0;
+      for (var key in stops[i]) if (key !== 'Escaped') { stopped += stops[i][key]; depth += Math.max(stops[i][key] * k, 12) + 3; }
+      deepest = Math.max(deepest, depth);
+      left -= stopped;
+    });
+    // As tall as the deepest stack of drop-offs needs, and no taller.
+    var FH = Math.ceil(dropTop + Math.max(deepest, 12) + 12);
+    var svg = el('svg', { viewBox: '0 0 ' + W + ' ' + FH, height: FH, role: 'img' }, host);
+    var color = {};
+    kinds.forEach(function (o) { color[o.key] = o.color; });
+    color.Escaped = 'var(--s1)';
+
+    stages.forEach(function (s, i) {
+      var x = x0 + step * i, h = still[i] * k;
+      // The line on to the next stage, as thick as the runs that reached it.
+      if (i < stages.length - 1 && still[i + 1] > 0) {
+        el('rect', { x: x + NODE, y: y0, width: step - NODE, height: still[i + 1] * k, fill: 'var(--ink-2)', 'fill-opacity': 0.18 }, svg);
+      }
+      var last = i === stages.length - 1;
+      if (h > 0) el('rect', { x: x, y: y0, width: NODE, height: h, rx: 2, fill: last ? 'var(--s1)' : 'var(--ink-2)' }, svg);
+      var anchor = i === 0 ? 'start' : last ? 'end' : 'middle', tx = i === 0 ? x : last ? x + NODE : x + NODE / 2;
+      // A phone has no room for "Room 1" between stages: R1, and Esc. for Escaped (the tooltip has the full name).
+      var shortName = step < 60 ? s.replace('Room ', 'R').replace('Escaped', 'Esc.') : s;
+      el('text', { x: tx, y: y0 - 18, 'text-anchor': anchor }, svg).textContent = shortName;
+      el('text', { class: 'value', x: tx, y: y0 - 5, 'text-anchor': anchor }, svg).textContent = still[i];
+
+      // The runs that stopped here: from the bottom of the node (below the line that goes on), each way of ending
+      // bends down and right to its own block.
+      // A band leaves the node's right edge level and arrives at its block level (a plain Sankey link), so the
+      // bands of one stage stack without crossing; each block leaves room for its count.
+      var y = y0 + (last ? h : still[i + 1] * k), by = dropTop, tipLines = [];
+      var x1 = x + NODE, x2 = x + NODE + Math.min(step * 0.5, 44), xm = (x1 + x2) / 2;
+      kinds.forEach(function (o) {
+        var c = stops[i][o.key] || 0;
+        if (!c) return;
+        var t = Math.max(1, c * k);
+        el('path', { d: 'M' + x1 + ',' + y + 'C' + xm + ',' + y + ' ' + xm + ',' + by + ' ' + x2 + ',' + by
+          + 'V' + (by + t) + 'C' + xm + ',' + (by + t) + ' ' + xm + ',' + (y + t) + ' ' + x1 + ',' + (y + t) + 'Z',
+          fill: o.color, 'fill-opacity': 0.55 }, svg);
+        el('rect', { x: x2, y: by, width: NODE, height: t, rx: 2, fill: o.color }, svg);
+        el('text', { class: 'value', x: x2 + NODE + 4, y: by + t / 2 + 4, 'text-anchor': 'start' }, svg).textContent = c;
+        tipLines.push(o.label + ': ' + c);
+        y += t;
+        by += Math.max(t, 12) + 3;
+      });
+      if (last) tipLines.push('Crew escaped: ' + still[i]);
+      var tip = '<b>' + esc(s + (names[i] ? ': ' + names[i] : '')) + '</b>' + plural(still[i], 'run') + ' got here'
+        + (tipLines.length ? '<br>' + (last ? '' : 'stopped here: ') + tipLines.join('<br>') : '<br>none stopped here');
+      var r = el('rect', { class: 'hit', x: x - step / 2 + NODE / 2, y: 0, width: step, height: FH }, svg);
+      r.addEventListener('mousemove', function (e) { showTip(e, tip); });
+      r.addEventListener('mouseleave', hideTip);
+    });
+  }
+
+  function showTip(e, html) {
+    var t = $('tip');
+    t.innerHTML = html;
+    t.style.display = 'block';
+    var x = e.clientX + 14, y = e.clientY + 14;
+    if (x + t.offsetWidth > innerWidth - 8) x = e.clientX - t.offsetWidth - 14;
+    if (y + t.offsetHeight > innerHeight - 8) y = e.clientY - t.offsetHeight - 14;
+    t.style.left = x + 'px';
+    t.style.top = y + 'px';
+  }
+
+  function hideTip() { $('tip').style.display = 'none'; }
+
+  $('refresh').addEventListener('click', load);
+  $('build').addEventListener('change', render);
+  $('abandoned').addEventListener('change', render);
+  $('glitch-debug').addEventListener('change', render);
+  $('glitch-room').addEventListener('change', render);
+  var resizeTimer;
+  addEventListener('resize', function () { clearTimeout(resizeTimer); resizeTimer = setTimeout(render, 150); });
+  setInterval(function () { if (!document.hidden) load(); }, REFRESH_MS);
+  load();
+})();
+</script>
+</body>
+</html>
