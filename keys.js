@@ -155,36 +155,86 @@
     }
   }
 
-  // Must be called inside a user gesture (a button click): browsers refuse
-  // fullscreen without transient activation. Returns true when the request
-  // went out, not when it succeeded — the lock lands on fullscreenchange.
+  // A page may only go fullscreen from inside the user's own press: browsers
+  // refuse the request without user activation. Unity handles a press in its
+  // frame, a few milliseconds after the browser's event, which Chrome, Edge
+  // and Firefox still count (activation lasts a few seconds). A browser that
+  // does not (Safari wants the call inside the handler itself) refuses, and
+  // then the request is made again from inside the next real input events:
+  // normally the release of that same press.
+  var RETRY_WINDOW_MS = 3000;
+  var RETRY_LIMIT = 4;
+  var retryUntil = 0;
+  var retriesLeft = 0;
+  var askedAt = 0;
+
+  function requestFullscreen(onRefused) {
+    var el = container();
+    if (!el) return false;
+    var request = el.requestFullscreen || el.webkitRequestFullscreen || el.msRequestFullscreen;
+    if (!request) return false;
+    var p;
+    try {
+      p = request.call(el, { navigationUI: 'hide' });
+    } catch (inner) {
+      p = request.call(el);
+    }
+    if (p && typeof p.then === 'function') {
+      p.then(lockKeys, onRefused || function () { });
+    }
+    return true;
+  }
+
+  function armRetry() {
+    retryUntil = Date.now() + RETRY_WINDOW_MS;
+    retriesLeft = RETRY_LIMIT;
+  }
+
+  // Called from the game's FULL SCREEN button, on the press. Returns true when
+  // the request went out, not when it succeeded — the lock lands on
+  // fullscreenchange.
   function enterFullscreen() {
     try {
       if (isFullscreen()) {
         lockKeys();
         return true;
       }
-      var el = container();
-      if (!el) return false;
-      var request = el.requestFullscreen || el.webkitRequestFullscreen || el.msRequestFullscreen;
-      if (!request) return false;
-      var p;
-      try {
-        p = request.call(el, { navigationUI: 'hide' });
-      } catch (inner) {
-        p = request.call(el);
-      }
-      if (p && typeof p.then === 'function') {
-        p.then(lockKeys, function () { });
-      }
-      return true;
+      askedAt = Date.now();
+      return requestFullscreen(armRetry);
     } catch (e) {
       return false;
     }
   }
 
+  // Capturing, on the window: a refused request is made again here, inside a
+  // real input handler. Does nothing unless a request was refused moments ago.
+  function onGesture() {
+    try {
+      if (!retryUntil) return;
+      if (isFullscreen() || Date.now() > retryUntil || retriesLeft <= 0) {
+        retryUntil = 0;
+        return;
+      }
+      retriesLeft--;
+      requestFullscreen(null);
+    } catch (err) {
+      retryUntil = 0;
+    }
+  }
+
+  // A browser whose request returns no promise reports a refusal only here.
+  function onFullscreenError() {
+    try {
+      if (askedAt && Date.now() - askedAt < 1000) armRetry();
+      askedAt = 0;
+    } catch (err) {
+      // An event handler must never throw.
+    }
+  }
+
   function exitFullscreen() {
     try {
+      retryUntil = 0;
       unlockKeys();
       if (!isFullscreen()) return true;
       var exit = document.exitFullscreen || document.webkitExitFullscreen || document.msExitFullscreen;
@@ -198,14 +248,25 @@
   }
 
   function onFullscreenChange() {
-    if (isFullscreen()) lockKeys();
-    else unlockKeys();
+    if (isFullscreen()) {
+      retryUntil = 0;
+      lockKeys();
+    } else {
+      unlockKeys();
+    }
   }
 
   try {
     window.addEventListener('keydown', onKeyDown, true);
     document.addEventListener('fullscreenchange', onFullscreenChange);
     document.addEventListener('webkitfullscreenchange', onFullscreenChange);
+    document.addEventListener('fullscreenerror', onFullscreenError);
+    document.addEventListener('webkitfullscreenerror', onFullscreenError);
+    window.addEventListener('pointerup', onGesture, true);
+    window.addEventListener('mouseup', onGesture, true);
+    window.addEventListener('click', onGesture, true);
+    window.addEventListener('touchend', onGesture, true);
+    window.addEventListener('keydown', onGesture, true);
   } catch (e) {
     // A browser this old will not run the game either; do not break the load.
   }
